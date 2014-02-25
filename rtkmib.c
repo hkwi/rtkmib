@@ -74,7 +74,7 @@ inline uint32_t swap32( uint32_t x )
 		(x << 24);
 }
 
-#define RING_SIZE       4096    /* size of ring buffer */
+#define RING_SIZE       4096    /* size of ring buffer, must be power of 2 */
 #define UL_MATCH        18      /* upper limit for match_length */
 #define THRESHOLD       2       /* encode string into position and length
                                  * if match_length is greater than this */
@@ -101,52 +101,49 @@ static int mib_decode( unsigned char *in, uint32_t len, unsigned char **out )
 		return -1;
 	}
 
-	memset( text_buf, 0, RING_SIZE + UL_MATCH - 1 );
+	/* original code initializes text_buf with spaces */
+	memset( text_buf, ' ', r );
 	memset( *out, 0, len );
 
 	while (1) {
-		if ( ((flags >>= 1) & 256) == 0 ) {
-			pos++;
-			if ( pos > len )
+		if ( ((flags >>= 1) & 0x100) == 0 ) {
+			if ( pos++ > len )
 				break;
-			c = in[ pos ];		/* get flags for frame */
+			c = *in++;		/* get flags for frame */
 			flags = c | 0xff00;	/* uses higher byte cleverly */
 		}				/* to count eight */
 		/* test next flag bit */
 		if ( flags & 1 ) {
 			/* flag bit of 1 means unencoded byte */
-			pos++;
-			if ( pos > len )
+			if ( pos++ > len )
 				break;
-			c = in[ pos ];
-			explen++;
-			if ( explen > len )
+			c = *in++;
+			if ( explen + 1 > len )
 				*out = (unsigned char *)realloc( *out, explen + 1 );
-			(*out)[ explen ] = c;		/* copy to output */
-			printf("%i: %x\n", explen - 1, c); fflush(stdout);
-			text_buf[ r++ ] = c;		/* and to text_buf */
+			(*out)[ explen ] = c;	/* copy to output */
+			//printf("%i: %x\n", explen, c); fflush(stdout);
+			explen++;
+			text_buf[ r++ ] = c;	/* and to text_buf */
 			r &= (RING_SIZE - 1);
 		} else {
 			/* 0 means encoded info */
-			pos++;
-			if ( pos > len )
+			if ( pos++ > len )
 				break;
-			i = in[ pos ];		/* get position */
-			pos++; // ???
-			if ( pos > len )
+			i = *in++;		/* get position */
+			if ( pos++ > len )
 				break;
-			j = in[ pos ];		/* get length of run */
+			j = *in++;		/* get length of run */
 
 			i |= ((j & 0xf0) << 4);	    /* i is now offset of run */
 			j = (j & 0x0f) + THRESHOLD; /* j is the length */
 
 			for ( k = 0; k <= j; k++ ) {
 				c = text_buf[ (i + k) & (RING_SIZE - 1) ];
-				explen++;
-				if ( explen > len )
+				if ( explen + 1 > len )
 					*out = (unsigned char *)realloc( (void *)*out, explen + 1 );
 				(*out)[ explen ] = c;
-				printf("c%i: %x\n", explen - 1, c); fflush(stdout);
+				//printf("c%i: %x\n", explen, c); fflush(stdout);
+				explen++;
 				text_buf[ r++ ] = c;
 				r &= (RING_SIZE - 1);
 			}
@@ -463,6 +460,7 @@ int main( int argc, char **argv )
 
 	unsigned char *buf = NULL;
 	unsigned char *mib = NULL;
+	unsigned char *tmp = NULL;
 	int mib_len = 0;
 	uint32_t compr_size = 0;
 	mib_wlan_t *mib_wlan;
@@ -479,24 +477,28 @@ int main( int argc, char **argv )
 
 	if ( mib_len == MIB_ERR_COMPRESSED ) {
 		printf("Compressed size: %i\n", compr_size);
-		mib_len = mib_decode( buf, compr_size, &mib );
+		mib_len = mib_decode( buf, compr_size, &tmp );
+
+		mib_hdr_t *header = (mib_hdr_t *)tmp;
+		printf("Header signature: '%s' (%x)\n", header->sig, ((char *)header)[0]);
+		printf("Length from header: 0x%x\n", swap16(header->len));
+		printf("Decoded length: 0x%x\n", mib_len);
+
+		mib = tmp + sizeof(mib_hdr_t);
 	} else {
 		mib = buf;
 	}
 
-	printf( "MIB len: %i\n", mib_len );
-	printf( "Expected mininum len: %i\n", (int)sizeof(mib_t) );
+	//printf( "MIB len: %i\n", mib_len );
+	printf( "Expected mininum len: 0x%x\n", (int)sizeof(mib_t) );
 
 	if ( mib_len < (int)sizeof(mib_t) ) {
 		syslog( LOG_ERR, "MIB length invalid!\n" );
 		goto exit;
 	}
 
-//	mib_hdr_t *header = (mib_hdr_t *)mib;
-//	printf("%s\n", header->sig);
-//	printf("%i\n", header->len);
 
-	printf("board version: %02x\n", mib[0]);
+	printf("board version: 0x%02x\n", mib[0]);
 	printf("nic0: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[1], mib[2], mib[3],
 				mib[4], mib[5], mib[6] );
@@ -509,6 +511,24 @@ int main( int argc, char **argv )
 	printf("wlan1: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[19], mib[20], mib[21],
 				mib[22], mib[23], mib[24] );
+	printf("wlan2: %02x:%02x:%02x:%02x:%02x:%02x\n",
+				mib[25], mib[26], mib[27],
+				mib[28], mib[29], mib[30] );
+	printf("wlan3: %02x:%02x:%02x:%02x:%02x:%02x\n",
+				mib[31], mib[32], mib[33],
+				mib[34], mib[35], mib[36] );
+	printf("wlan4: %02x:%02x:%02x:%02x:%02x:%02x\n",
+				mib[37], mib[38], mib[39],
+				mib[40], mib[41], mib[42] );
+	printf("wlan5: %02x:%02x:%02x:%02x:%02x:%02x\n",
+				mib[43], mib[44], mib[45],
+				mib[46], mib[47], mib[48] );
+	printf("wlan6: %02x:%02x:%02x:%02x:%02x:%02x\n",
+				mib[49], mib[50], mib[51],
+				mib[52], mib[53], mib[54] );
+	printf("wlan7: %02x:%02x:%02x:%02x:%02x:%02x\n",
+				mib[55], mib[56], mib[57],
+				mib[58], mib[59], mib[60] );
 
 	mib_wlan = (mib_wlan_t *)( mib + MIB_WLAN_OFFSET );
 	set_tx_calibration( mib_wlan, "wlan0" );
@@ -520,7 +540,7 @@ int main( int argc, char **argv )
 exit:
 	free(buf);
 	if ( mib != buf )
-		free(mib);
+		free(tmp);
 
 	exit(EXIT_SUCCESS);
 }
