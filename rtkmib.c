@@ -62,17 +62,28 @@ static int flash_read( char *mtd, int offset, int len, char *buf )
 	return err;
 }
 
+int is_big_endian( void )
+{
+	union {
+		uint32_t i;
+		char c[4];
+	} e = { 0x01000000 };
+
+	return e.c[0];
+}
+
 inline uint16_t swap16( uint16_t x )
 {
-	return ((x >> 8) & 0xff) | (x << 8);
+	return is_big_endian()? x : ((x >> 8) & 0xff) | (x << 8);
 }
 
 inline uint32_t swap32( uint32_t x )
 {
-	return (x >> 24) |
-	       ((x << 8) & 0x00ff0000) |
-	       ((x >> 8) & 0x0000ff00) |
-	       (x << 24);
+	return is_big_endian()? x :
+				(x >> 24) |
+				((x << 8) & 0x00ff0000) |
+				((x >> 8) & 0x0000ff00) |
+				(x << 24);
 }
 
 #define RING_SIZE       4096    /* size of ring buffer, must be power of 2 */
