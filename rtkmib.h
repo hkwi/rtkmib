@@ -85,10 +85,10 @@ typedef struct mib_wlan
 	unsigned char TSSI1;
 	unsigned char TSSI2;
 	unsigned char Ther;
-	unsigned char Reserved1;
-	unsigned char Reserved2;
-	unsigned char Reserved3;
-	unsigned char Reserved4;
+	unsigned char trswitch;
+	unsigned char trswpape_c9;
+	unsigned char trswpape_cc;
+	unsigned char target_pwr;
 	unsigned char Reserved5;
 	unsigned char Reserved6;
 	unsigned char Reserved7;
@@ -182,8 +182,8 @@ typedef struct mib_wlan_ac
 
 typedef struct mib
 {
-	unsigned char boardVer;
-	unsigned char nic0Addr[6];
-	unsigned char nic1Addr[6];
+	unsigned char board_ver;
+	unsigned char nic0_addr[6];
+	unsigned char nic1_addr[6];
 	mib_wlan_t wlan[ NUM_WLAN_INTERFACE ];
 } __PACK__ mib_t;

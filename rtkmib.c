@@ -1,15 +1,17 @@
 #include <getopt.h>
 
 #include "rtkmib.h"
+#include "mibtbl.h"
 
 #define NAME		"rtkmib"
-#define VERSION		"0.0.1"
+#define VERSION		"0.0.2"
 
 
-static const char *opt_string = ":i:o:h";
+static const char *opt_string = ":i:O:o:h";
 static struct option long_options[] = {
 	{ "input", required_argument, NULL, 'i' },
-	{ "output", required_argument, NULL, 'o' },
+	{ "output", required_argument, NULL, 'O' },
+	{ "offset", required_argument, NULL, 'o' },
 	{ "help", no_argument, NULL, 'h' },
 	{ 0, 0, 0, 0 },
 };
@@ -20,7 +22,8 @@ void usage ( char *pname ) {
 		"\n",
 		"   Options:\n",
 		"   -i, --input            input file name\n",
-		"   -o, --output           output file name\n",
+		"   -O, --output           output file name\n",
+		"   -o, --offset           MIB data start offset (bytes)\n",
 		"   -h, --help             print this help message\n",
 		"\n",
 		"If you find bugs, cockroaches or other nasty insects don't\n",
@@ -61,17 +64,15 @@ static int flash_read( char *mtd, int offset, int len, char *buf )
 
 inline uint16_t swap16( uint16_t x )
 {
-	uint16_t b = x;
-	b = (x >> 8) & 0xff;
-	return b | (x << 8);
+	return ((x >> 8) & 0xff) | (x << 8);
 }
 
 inline uint32_t swap32( uint32_t x )
 {
-	return x = (x >> 24) |
-		((x << 8) & 0x00ff0000) |
-		((x >> 8) & 0x0000ff00) |
-		(x << 24);
+	return (x >> 24) |
+	       ((x << 8) & 0x00ff0000) |
+	       ((x >> 8) & 0x0000ff00) |
+	       (x << 24);
 }
 
 #define RING_SIZE       4096    /* size of ring buffer, must be power of 2 */
@@ -123,7 +124,8 @@ static int mib_decode( unsigned char *in, uint32_t len, unsigned char **out )
 			(*out)[ explen ] = c;	/* copy to output */
 			//printf("%i: %x\n", explen, c); fflush(stdout);
 			explen++;
-			text_buf[ r++ ] = c;	/* and to text_buf */
+			text_buf[ r ] = c;	/* and to text_buf */
+			r++;
 			r &= (RING_SIZE - 1);
 		} else {
 			/* 0 means encoded info */
@@ -144,7 +146,8 @@ static int mib_decode( unsigned char *in, uint32_t len, unsigned char **out )
 				(*out)[ explen ] = c;
 				//printf("c%i: %x\n", explen, c); fflush(stdout);
 				explen++;
-				text_buf[ r++ ] = c;
+				text_buf[ r ] = c;
+				r++;
 				r &= (RING_SIZE - 1);
 			}
 		}
@@ -175,7 +178,9 @@ static int mib_read( char *mtd, unsigned int offset,
 		      header.sig,
 		      sizeof(header.sig) ) )
 	{
+#ifdef _DEBUG_
 		printf( "MIB is compressed!\n" );
+#endif
 		if ( flash_read( mtd, offset, sizeof(mib_hdr_compr_t),
 						(char *)&header_compr ) )
 		{
@@ -189,15 +194,17 @@ static int mib_read( char *mtd, unsigned int offset,
 		sig = header.sig;
 		len = swap16(header.len);
 	}
-
+#ifdef _DEBUG_
 	printf( "Header info:\n" );
 	printf( "  signature: '%s'\n", sig );
 	printf( "  data size: 0x%x\n", len );
-
+#endif
 	*mib = (unsigned char *)malloc(len);
 
 	if ( compression ) {
+#ifdef _DEBUG_
 		printf( "  compression factor: 0x%x\n", compression );
+#endif
 		*size = len;
 		if ( flash_read( mtd, offset + sizeof(mib_hdr_compr_t),
 				 len, (char *)*mib ) )
@@ -216,6 +223,267 @@ static int mib_read( char *mtd, unsigned int offset,
 	}
 
 	return len;
+}
+
+void print_hex( unsigned char *buf, uint32_t size )
+{
+	uint32_t pos = 0;
+	uint32_t lines = 0;
+
+	while ( pos < size ) {
+		printf(" %02x", buf[pos]);
+		pos++;
+		if ( lines == 31 ) {
+			printf("\n");
+			lines = 0;
+			continue;
+		}
+		if ( lines == 7 || lines == 15 || lines == 23 )
+			printf("  ");
+		lines++;
+	}
+	printf("\n");
+}
+
+void mibtbl_to_struct( unsigned char *tbl, uint32_t size, unsigned char *mib )
+{
+	int i = 0;
+	mibtbl_t mibtbl;
+
+	while ( i < size ) {
+		memcpy( &mibtbl, tbl + i, sizeof(mibtbl_t) );
+		i += sizeof(mibtbl_t);
+
+		/* does 0xc900 mean the end of a table? */
+		if( swap16(mibtbl.type) > MIB_TABLE_LIST ) {
+#ifdef _DEBUG_
+			printf( "Next table with size 0x%02x!\n",
+						swap16(mibtbl.size) );
+#endif
+			continue;
+		}
+
+		switch ( swap16(mibtbl.type) ) {
+		case 0:
+#ifdef _DEBUG_
+			printf("End of MIB tables!\n");
+#endif
+			break;
+		case MIB_HW_BOARD_VER:
+			memcpy( &(((mib_t *)mib)->board_ver),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_NIC0_ADDR:
+			memcpy( &(((mib_t *)mib)->nic0_addr),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_NIC1_ADDR:
+			memcpy( &(((mib_t *)mib)->nic1_addr),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WLAN_ADDR:
+			memcpy( &(((mib_t *)mib)->wlan->macAddr),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_REG_DOMAIN:
+			memcpy( &(((mib_t *)mib)->wlan->regDomain),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_RF_TYPE:
+			memcpy( &(((mib_t *)mib)->wlan->rfType),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_LED_TYPE:
+			memcpy( &(((mib_t *)mib)->wlan->ledType),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WSC_PIN:
+			memcpy( &(((mib_t *)mib)->wlan->wscPin),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_XCAP:
+			memcpy( &(((mib_t *)mib)->wlan->xCap),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WLAN_ADDR1:
+			memcpy( &(((mib_t *)mib)->wlan->macAddr1),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WLAN_ADDR2:
+			memcpy( &(((mib_t *)mib)->wlan->macAddr2),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WLAN_ADDR3:
+			memcpy( &(((mib_t *)mib)->wlan->macAddr3),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WLAN_ADDR4:
+			memcpy( &(((mib_t *)mib)->wlan->macAddr4),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WLAN_ADDR5:
+			memcpy( &(((mib_t *)mib)->wlan->macAddr5),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WLAN_ADDR6:
+			memcpy( &(((mib_t *)mib)->wlan->macAddr6),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_WLAN_ADDR7:
+			memcpy( &(((mib_t *)mib)->wlan->macAddr7),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_TSSI1:
+			memcpy( &(((mib_t *)mib)->wlan->TSSI1),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_TSSI2:
+			memcpy( &(((mib_t *)mib)->wlan->TSSI2),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_THER:
+			memcpy( &(((mib_t *)mib)->wlan->Ther),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_TRSWITCH:
+			memcpy( &(((mib_t *)mib)->wlan->trswitch),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_TRSWPAPE_C9:
+			memcpy( &(((mib_t *)mib)->wlan->trswpape_c9),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_TRSWPAPE_CC:
+			memcpy( &(((mib_t *)mib)->wlan->trswpape_cc),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_TARGET_PWR:
+			memcpy( &(((mib_t *)mib)->wlan->target_pwr),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_RESERVED5:
+			memcpy( &(((mib_t *)mib)->wlan->Reserved5),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_RESERVED6:
+			memcpy( &(((mib_t *)mib)->wlan->Reserved6),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_RESERVED7:
+			memcpy( &(((mib_t *)mib)->wlan->Reserved7),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_RESERVED8:
+			memcpy( &(((mib_t *)mib)->wlan->Reserved8),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_CCK_A:
+			memcpy( &(((mib_t *)mib)->wlan->pwrlevelCCK_A),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_CCK_B:
+			memcpy( &(((mib_t *)mib)->wlan->pwrlevelCCK_B),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_HT40_1S_A:
+			memcpy( &(((mib_t *)mib)->wlan->pwrlevelHT40_1S_A),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_HT40_1S_B:
+			memcpy( &(((mib_t *)mib)->wlan->pwrlevelHT40_1S_B),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_DIFF_HT40_2S:
+			memcpy( &(((mib_t *)mib)->wlan->pwrdiffHT40_2S),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_DIFF_HT20:
+			memcpy( &(((mib_t *)mib)->wlan->pwrdiffHT20),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_DIFF_OFDM:
+			memcpy( &(((mib_t *)mib)->wlan->pwrdiffOFDM),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_RESERVED9:
+			memcpy( &(((mib_t *)mib)->wlan->Reserved9),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_11N_RESERVED10:
+			memcpy( &(((mib_t *)mib)->wlan->Reserved10),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_5G_HT40_1S_A:
+			memcpy( &(((mib_t *)mib)->wlan->pwrlevel5GHT40_1S_A),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_5G_HT40_1S_B:
+			memcpy( &(((mib_t *)mib)->wlan->pwrlevel5GHT40_1S_B),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_DIFF_5G_HT40_2S:
+			memcpy( &(((mib_t *)mib)->wlan->pwrdiff5GHT40_2S),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_DIFF_5G_HT20:
+			memcpy( &(((mib_t *)mib)->wlan->pwrdiff5GHT20),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		case MIB_HW_TX_POWER_DIFF_5G_OFDM:
+			memcpy( &(((mib_t *)mib)->wlan->pwrdiff5GOFDM),
+					tbl + i,
+					swap16(mibtbl.size) );
+			break;
+		default:
+			printf( "unknown field (type %i) found,"
+				"containing data:\n",
+				swap16(mibtbl.type) );
+			print_hex( tbl + i, swap16(mibtbl.size) );
+			break;
+		}
+
+		i += swap16(mibtbl.size);
+	}
 }
 
 static int hex_to_string( unsigned char *hex, char *str, int len )
@@ -328,6 +596,7 @@ int set_tx_calibration( mib_wlan_t *phw, char *interface )
 	hex_to_string(phw->pwrdiffOFDM,p,MAX_2G_CHANNEL_NUM_MIB);
 	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiffOFDM=%s",interface,p);
 //	system(tmpbuff);
+	printf("%s\n",tmpbuff);
 
 	hex_to_string(phw->pwrlevel5GHT40_1S_A,p,MAX_5G_CHANNEL_NUM_MIB);
 	sprintf(tmpbuff,"iwpriv %s set_mib pwrlevel5GHT40_1S_A=%s",interface,p);
@@ -462,7 +731,7 @@ int main( int argc, char **argv )
 	unsigned char *mib = NULL;
 	unsigned char *tmp = NULL;
 	int mib_len = 0;
-	uint32_t compr_size = 0;
+	uint32_t size = 0;
 	mib_wlan_t *mib_wlan;
 
 	if ( efuse ) {
@@ -470,66 +739,68 @@ int main( int argc, char **argv )
 		exit(EXIT_SUCCESS);
 	}
 
-	mib_len = mib_read( infile, mib_offset,	&buf, &compr_size );
+	mib_len = mib_read( infile, mib_offset,	&buf, &size );
 
 	if ( mib_len == MIB_ERR_GENERIC )
 		goto exit;
 
 	if ( mib_len == MIB_ERR_COMPRESSED ) {
-		printf("Compressed size: %i\n", compr_size);
-		mib_len = mib_decode( buf, compr_size, &tmp );
-
+		mib_len = mib_decode( buf, size, &tmp );
+#ifdef _DEBUG_
+		printf( "Compressed size: %i\n", size );
 		mib_hdr_t *header = (mib_hdr_t *)tmp;
-		printf("Header signature: '%s' (%x)\n", header->sig, ((char *)header)[0]);
-		printf("Length from header: 0x%x\n", swap16(header->len));
-		printf("Decoded length: 0x%x\n", mib_len);
-
-		mib = tmp + sizeof(mib_hdr_t);
-	} else {
-		mib = buf;
+		printf( "Header signature: '%s'\n", header->sig );
+		printf( "Length from header: 0x%x\n", swap16(header->len) );
+		printf( "Decoded length: 0x%x\n", mib_len );
+		printf( "Expected mininum len: 0x%x\n", (int)sizeof(mib_t) );
+		printf( "Decoded data:\n" );
+		print_hex( tmp + sizeof(mib_hdr_t), mib_len );
+#endif
+		free(buf);
+		buf = (unsigned char *)malloc( sizeof(mib_t) );
+		memset( buf, 0, sizeof(mib_t) );
+		mibtbl_to_struct( tmp + sizeof(mib_hdr_t), mib_len, buf );
 	}
 
-	//printf( "MIB len: %i\n", mib_len );
-	printf( "Expected mininum len: 0x%x\n", (int)sizeof(mib_t) );
+	mib = buf;
 
 	if ( mib_len < (int)sizeof(mib_t) ) {
 		syslog( LOG_ERR, "MIB length invalid!\n" );
 		goto exit;
 	}
-
-
-	printf("board version: 0x%02x\n", mib[0]);
-	printf("nic0: %02x:%02x:%02x:%02x:%02x:%02x\n",
+#ifdef _DEBUG_
+	printf( "board version: 0x%02x\n", mib[0]);
+	printf( "nic0: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[1], mib[2], mib[3],
 				mib[4], mib[5], mib[6] );
-	printf("nic1: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "nic1: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[7], mib[8], mib[9],
 				mib[10], mib[11], mib[12] );
-	printf("wlan0: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "wlan0: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[13], mib[14], mib[15],
 				mib[16], mib[17], mib[18] );
-	printf("wlan1: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "wlan1: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[19], mib[20], mib[21],
 				mib[22], mib[23], mib[24] );
-	printf("wlan2: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "wlan2: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[25], mib[26], mib[27],
 				mib[28], mib[29], mib[30] );
-	printf("wlan3: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "wlan3: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[31], mib[32], mib[33],
 				mib[34], mib[35], mib[36] );
-	printf("wlan4: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "wlan4: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[37], mib[38], mib[39],
 				mib[40], mib[41], mib[42] );
-	printf("wlan5: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "wlan5: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[43], mib[44], mib[45],
 				mib[46], mib[47], mib[48] );
-	printf("wlan6: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "wlan6: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[49], mib[50], mib[51],
 				mib[52], mib[53], mib[54] );
-	printf("wlan7: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printf( "wlan7: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[55], mib[56], mib[57],
 				mib[58], mib[59], mib[60] );
-
+#endif
 	mib_wlan = (mib_wlan_t *)( mib + MIB_WLAN_OFFSET );
 	set_tx_calibration( mib_wlan, "wlan0" );
 
