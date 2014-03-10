@@ -5,12 +5,13 @@
 #include "mibtbl.h"
 
 #define NAME		"rtkmib"
-#define VERSION		"0.0.2"
+#define VERSION		"0.0.3"
 
 
 uint8_t verbose = 0;
-static const char *opt_string = ":i:O:o:hv";
+static const char *opt_string = ":g:i:O:o:hv";
 static struct option long_options[] = {
+	{ "get", required_argument, NULL, 'g' },
 	{ "input", required_argument, NULL, 'i' },
 	{ "output", required_argument, NULL, 'O' },
 	{ "offset", required_argument, NULL, 'o' },
@@ -24,6 +25,9 @@ void usage ( char *pname ) {
 	char *optdoc[] = {
 		"\n",
 		"   Options:\n",
+		"   -g, --get              get a part of MIB information:\n",
+		"                          ver, macs, mac0, mac1, wmac0, wcal\n",
+		"                          default: ver\n",
 		"   -i, --input            input file name\n",
 		"   -O, --output           output file name\n",
 		"   -o, --offset           MIB data start offset (bytes)\n",
@@ -104,6 +108,16 @@ static void print_hex( unsigned char *buf, uint32_t size )
 	printf("\n");
 }
 
+static void print_mac( unsigned char *buf )
+{
+	if ( !buf )
+		return;
+
+	printf( "%02x:%02x:%02x:%02x:%02x:%02x",
+			buf[0], buf[1], buf[2],
+			buf[3], buf[4], buf[5] );
+}
+
 static int flash_read( char *mtd, int offset, int len, char *buf )
 {
 	if ( !buf || !mtd || len < 0 )
@@ -167,14 +181,17 @@ static int mib_read( char *mtd, unsigned int offset,
 	}
 
 	printv( "Header info:\n" );
-	printv( "  signature: '%s'\n", sig );
+	if ( compression ) {
+		printv( "  signature: '%.6s'\n", sig );
+		printv( "  compression factor: 0x%x\n", compression );
+	} else {
+		printv( "  signature: '%.2s'\n", sig );
+	}
 	printv( "  data size: 0x%x\n", len );
 
 	*mib = (unsigned char *)malloc(len);
 
 	if ( compression ) {
-		printv( "  compression factor: 0x%x\n", compression );
-
 		*size = len;
 		if ( flash_read( mtd, offset + sizeof(mib_hdr_compr_t),
 				 len, (char *)*mib ) )
@@ -590,137 +607,112 @@ void assign_diff_AC_hex_to_string(unsigned char* pmib,char* str,int len)
 }
 #endif /* HAVE_RTK_AC_SUPPORT */
 
-int set_tx_calibration( mib_wlan_t *phw, char *interface )
+void set_tx_calibration( mib_wlan_t *phw, char *interface )
 {
-	char tmpbuff[1024], p[ MAX_5G_CHANNEL_NUM_MIB * 2 + 1 ];
-	if(!phw)
-		return -1;
+	if( !phw )
+		return;
 
-	hex_to_string(phw->pwrlevelCCK_A,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrlevelCCK_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	char p[ MAX_5G_CHANNEL_NUM_MIB * 2 + 1 ];
 
-	hex_to_string(phw->pwrlevelCCK_B,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrlevelCCK_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrlevelCCK_A, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrlevelCCK_A=%s\n", p );
 
-	hex_to_string(phw->pwrlevelHT40_1S_A,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrlevelHT40_1S_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrlevelCCK_B, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrlevelCCK_B=%s\n", p );
 
-	hex_to_string(phw->pwrlevelHT40_1S_B,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrlevelHT40_1S_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrlevelHT40_1S_A, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrlevelHT40_1S_A=%s\n", p );
 
-	hex_to_string(phw->pwrdiffHT40_2S,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiffHT40_2S=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrlevelHT40_1S_B, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrlevelHT40_1S_B=%s\n", p );
 
-	hex_to_string(phw->pwrdiffHT20,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiffHT20=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiffHT40_2S, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrdiffHT40_2S=%s\n", p );
 
-	hex_to_string(phw->pwrdiffOFDM,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiffOFDM=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiffHT20, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrdiffHT20=%s\n", p );
 
-	hex_to_string(phw->pwrlevel5GHT40_1S_A,p,MAX_5G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrlevel5GHT40_1S_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiffOFDM, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrdiffOFDM=%s\n", p );
 
-	hex_to_string(phw->pwrlevel5GHT40_1S_B,p,MAX_5G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrlevel5GHT40_1S_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrlevel5GHT40_1S_A, p, MAX_5G_CHANNEL_NUM_MIB );
+	printf( "pwrlevel5GHT40_1S_A=%s\n", p );
+
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrlevel5GHT40_1S_B, p, MAX_5G_CHANNEL_NUM_MIB );
+	printf( "pwrlevel5GHT40_1S_B=%s\n", p );
 
 #ifdef HAVE_RTK_92D_SUPPORT
-	hex_to_string(phw->pwrdiff5GHT40_2S,p,MAX_5G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff5GHT40_2S=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiff5GHT40_2S, p, MAX_5G_CHANNEL_NUM_MIB );
+	printf( "pwrdiff5GHT40_2S=%s\n", p );
 
-	hex_to_string(phw->pwrdiff5GHT20,p,MAX_5G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff5GHT20=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiff5GHT20, p, MAX_5G_CHANNEL_NUM_MIB );
+	printf( "pwrdiff5GHT20=%s\n", p );
 
-	hex_to_string(phw->pwrdiff5GOFDM,p,MAX_5G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff5GOFDM=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiff5GOFDM, p, MAX_5G_CHANNEL_NUM_MIB );
+	printf( "pwrdiff5GOFDM=%s\n", p );
 #endif /* HAVE_RTK_92D_SUPPORT */
 
 #ifdef HAVE_RTK_AC_SUPPORT /* 8812 */
-	hex_to_string(phw->pwrdiff_20BW1S_OFDM1T_A,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_20BW1S_OFDM1T_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiff_20BW1S_OFDM1T_A, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrdiff_20BW1S_OFDM1T_A=%s\n", p );
 
-	hex_to_string(phw->pwrdiff_40BW2S_20BW2S_A,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_40BW2S_20BW2S_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiff_40BW2S_20BW2S_A, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrdiff_40BW2S_20BW2S_A=%s\n", p );
 
-	assign_diff_AC_hex_to_string(phw->pwrdiff_5G_20BW1S_OFDM1T_A,p,MAX_5G_DIFF_NUM);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_5G_20BW1S_OFDM1T_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	assign_diff_AC_hex_to_string( phw->pwrdiff_5G_20BW1S_OFDM1T_A, p, MAX_5G_DIFF_NUM );
+	printf( "pwrdiff_5G_20BW1S_OFDM1T_A=%s\n", p );
 
-	assign_diff_AC_hex_to_string(phw->pwrdiff_5G_40BW2S_20BW2S_A,p,MAX_5G_DIFF_NUM);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_5G_40BW2S_20BW2S_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	assign_diff_AC_hex_to_string( phw->pwrdiff_5G_40BW2S_20BW2S_A, p, MAX_5G_DIFF_NUM );
+	printf( "pwrdiff_5G_40BW2S_20BW2S_A=%s\n", p );
 
-	assign_diff_AC_hex_to_string(phw->pwrdiff_5G_80BW1S_160BW1S_A,p,MAX_5G_DIFF_NUM);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_5G_80BW1S_160BW1S_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	assign_diff_AC_hex_to_string( phw->pwrdiff_5G_80BW1S_160BW1S_A, p, MAX_5G_DIFF_NUM );
+	printf( "pwrdiff_5G_80BW1S_160BW1S_A=%s\n", p );
 
-	assign_diff_AC_hex_to_string(phw->pwrdiff_5G_80BW2S_160BW2S_A,p,MAX_5G_DIFF_NUM);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_5G_80BW2S_160BW2S_A=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	assign_diff_AC_hex_to_string( phw->pwrdiff_5G_80BW2S_160BW2S_A, p, MAX_5G_DIFF_NUM );
+	printf( "pwrdiff_5G_80BW2S_160BW2S_A=%s\n", p );
 
-	hex_to_string(phw->pwrdiff_20BW1S_OFDM1T_B,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_20BW1S_OFDM1T_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiff_20BW1S_OFDM1T_B, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrdiff_20BW1S_OFDM1T_B=%s\n", p );
 
-	hex_to_string(phw->pwrdiff_40BW2S_20BW2S_B,p,MAX_2G_CHANNEL_NUM_MIB);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_40BW2S_20BW2S_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	hex_to_string( phw->pwrdiff_40BW2S_20BW2S_B, p, MAX_2G_CHANNEL_NUM_MIB );
+	printf( "pwrdiff_40BW2S_20BW2S_B=%s\n", p );
 
-	assign_diff_AC_hex_to_string(phw->pwrdiff_5G_20BW1S_OFDM1T_B,p,MAX_5G_DIFF_NUM);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_5G_20BW1S_OFDM1T_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	assign_diff_AC_hex_to_string( phw->pwrdiff_5G_20BW1S_OFDM1T_B, p, MAX_5G_DIFF_NUM );
+	printf( "pwrdiff_5G_20BW1S_OFDM1T_B=%s\n", p );
 
-	assign_diff_AC_hex_to_string(phw->pwrdiff_5G_40BW2S_20BW2S_B,p,MAX_5G_DIFF_NUM);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_5G_40BW2S_20BW2S_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	assign_diff_AC_hex_to_string( phw->pwrdiff_5G_40BW2S_20BW2S_B, p, MAX_5G_DIFF_NUM );
+	printf( "pwrdiff_5G_40BW2S_20BW2S_B=%s\n", p );
 
-	assign_diff_AC_hex_to_string(phw->pwrdiff_5G_80BW1S_160BW1S_B,p,MAX_5G_DIFF_NUM);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_5G_80BW1S_160BW1S_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	assign_diff_AC_hex_to_string( phw->pwrdiff_5G_80BW1S_160BW1S_B, p, MAX_5G_DIFF_NUM );
+	printf( "pwrdiff_5G_80BW1S_160BW1S_B=%s\n", p );
 
-	assign_diff_AC_hex_to_string(phw->pwrdiff_5G_80BW2S_160BW2S_B,p,MAX_5G_DIFF_NUM);
-	sprintf(tmpbuff,"iwpriv %s set_mib pwrdiff_5G_80BW2S_160BW2S_B=%s",interface,p);
-//	system(tmpbuff);
-	printf("%s\n",tmpbuff);
+	memset( p, 0, sizeof(p) );
+	assign_diff_AC_hex_to_string( phw->pwrdiff_5G_80BW2S_160BW2S_B, p, MAX_5G_DIFF_NUM );
+	printf( "pwrdiff_5G_80BW2S_160BW2S_B=%s\n", p );
 #endif /* HAVE_RTK_AC_SUPPORT */
-
-	return 0;
 }
 
 int main( int argc, char **argv )
@@ -730,6 +722,7 @@ int main( int argc, char **argv )
 	char infile[ 255 ] = "";
 	char outfile[ 255 ] = "";
 	unsigned int mib_offset = MIB_OFFSET;
+	uint32_t get = MIB_HW_BOARD_VER;
 
 	int opt;
 	int option_index = 0;
@@ -738,6 +731,21 @@ int main( int argc, char **argv )
 					&option_index )) != -1 )
 	{
 		switch( opt ) {
+		case 'g':
+			if ( !strncmp( optarg, "macs", 5 ) ) {
+				get = MIB_HW_MACS;
+			} else if ( !strncmp( optarg, "mac0", 5 ) ) {
+				get = MIB_HW_NIC0_ADDR;
+			} else if ( !strncmp( optarg, "mac1", 5 ) ) {
+				get = MIB_HW_NIC1_ADDR;
+			} else if ( !strncmp( optarg, "wmac0", 6 ) ) {
+				get = MIB_HW_WLAN_ADDR;
+			} else if ( !strncmp( optarg, "wcal", 5 ) ) {
+				get = MIB_HW_WCAL;
+			} else if ( !strncmp( optarg, "ver", 4 ) ) {
+				get = MIB_HW_BOARD_VER;
+			}
+			break;
 		case 'i':
 			snprintf( infile, sizeof infile, "%s", optarg );
 			break;
@@ -768,7 +776,6 @@ int main( int argc, char **argv )
 	unsigned char *tmp = NULL;
 	int mib_len = 0;
 	uint32_t size = 0;
-	mib_wlan_t *mib_wlan;
 
 	if ( efuse ) {
 		printv( "Efuse enabled. Nothing to do!\n" );
@@ -785,7 +792,7 @@ int main( int argc, char **argv )
 
 		printv( "Compressed size: %i\n", size );
 		mib_hdr_t *header = (mib_hdr_t *)tmp;
-		printv( "Header signature: '%s'\n", header->sig );
+		printv( "Header signature: '%.2s'\n", header->sig );
 		printv( "Length from header: 0x%x\n", swap16(header->len) );
 		printv( "Decoded length: 0x%x\n", mib_len );
 		printv( "Expected mininum len: 0x%x\n", (int)sizeof(mib_t) );
@@ -807,44 +814,55 @@ int main( int argc, char **argv )
 	}
 
 	printv( "board version: 0x%02x\n", mib[0]);
-	printv( "nic0: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[1], mib[2], mib[3],
-				mib[4], mib[5], mib[6] );
-	printv( "nic1: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[7], mib[8], mib[9],
-				mib[10], mib[11], mib[12] );
-	printv( "wlan0: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[13], mib[14], mib[15],
-				mib[16], mib[17], mib[18] );
-	printv( "wlan1: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[19], mib[20], mib[21],
-				mib[22], mib[23], mib[24] );
-	printv( "wlan2: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[25], mib[26], mib[27],
-				mib[28], mib[29], mib[30] );
-	printv( "wlan3: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[31], mib[32], mib[33],
-				mib[34], mib[35], mib[36] );
-	printv( "wlan4: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[37], mib[38], mib[39],
-				mib[40], mib[41], mib[42] );
-	printv( "wlan5: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[43], mib[44], mib[45],
-				mib[46], mib[47], mib[48] );
-	printv( "wlan6: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[49], mib[50], mib[51],
-				mib[52], mib[53], mib[54] );
-	printv( "wlan7: %02x:%02x:%02x:%02x:%02x:%02x\n",
-				mib[55], mib[56], mib[57],
-				mib[58], mib[59], mib[60] );
 
-	mib_wlan = (mib_wlan_t *)( mib + MIB_WLAN_OFFSET );
-	set_tx_calibration( mib_wlan, "wlan0" );
-
+	switch (get) {
+	case MIB_HW_MACS:
+		print_mac( (unsigned char *)(((mib_t *)mib)->nic0_addr) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->nic1_addr) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr1) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr2) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr3) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr4) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr5) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr6) );
+		printf("\n");
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr7) );
+		printf("\n");
+		break;
+	case MIB_HW_NIC0_ADDR:
+		print_mac( (unsigned char *)(((mib_t *)mib)->nic0_addr) );
+		break;
+	case MIB_HW_NIC1_ADDR:
+		print_mac( (unsigned char *)(((mib_t *)mib)->nic1_addr) );
+		break;
+	case MIB_HW_WLAN_ADDR:
+		print_mac( (unsigned char *)(((mib_t *)mib)->wlan->macAddr) );
+		break;
+	case MIB_HW_WCAL:
+		set_tx_calibration( (mib_wlan_t *)( mib + MIB_WLAN_OFFSET ),
+								  "wlan0" );
 #ifdef HAVE_RTK_DUAL_BAND_SUPPORT
-	mib_wlan = (mib_wlan_t *)( mib + MIB_WLAN_OFFSET + sizeof(mib_wlan_t) );
-	set_tx_calibration( mib_wlan, "wlan1" );
+		set_tx_calibration((mib_wlan_t *)
+				   ( mib + MIB_WLAN_OFFSET + sizeof(mib_wlan_t),
+								  "wlan1" );
 #endif
+		break;
+	case MIB_HW_BOARD_VER:
+	default:
+		printf( "Board version: %i\n",
+			(((mib_t *)mib)->board_ver) );
+		break;
+	}
+
 exit:
 	free(buf);
 	if ( mib != buf )

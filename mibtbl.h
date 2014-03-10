@@ -5,6 +5,8 @@
 //#define MIB_TABLE_LIST 0x0
 //#endif
 
+#define MIB_HW_MACS			100
+
 #define MIB_HW_BOARD_VER		200
 #define MIB_HW_NIC0_ADDR		201
 #define MIB_HW_NIC1_ADDR		202
@@ -39,6 +41,7 @@
 #define MIB_HW_11N_RESERVED7		527
 #define MIB_HW_11N_RESERVED8		528
 
+#define MIB_HW_WCAL			900
 #define MIB_HW_TX_POWER_CCK_A		901
 #define MIB_HW_TX_POWER_CCK_B		902
 #define MIB_HW_TX_POWER_HT40_1S_A	903
