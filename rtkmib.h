@@ -7,12 +7,6 @@
 #include <stdint.h>
 #include <errno.h>
 
-#ifndef _DEBUG_
-#include <syslog.h>
-#else
-#define syslog(x,fmt,args...) printf(fmt,## args)
-#endif
-
 #define __PACK__		__attribute__((packed))
 
 #define MIB_ERR_GENERIC		-1
@@ -29,27 +23,28 @@
 #define MIB_OFFSET		MIB_OFFSET_DEFAULT
 #endif
 
-#define MIB_HEADER_TAG		"H6"
-#define MIB_HEADER_COMPR_TAG	"COMPHS"
-
-#define MIB_TAG_LEN		2
-#define MIB_COMPR_TAG_LEN	6
-#define SIGNATURE_LEN		4
 #define HW_SETTING_VER		3 /* hw setting version */
 
+#define MIB_HEADER_TAG		"H6"
+#define MIB_TAG_LEN		2
+#define MIB_SIG_LEN		4
 typedef struct mib_hdr
 {
-	unsigned char  sig[ SIGNATURE_LEN ]; /* tag + version */
+	unsigned char  sig[ MIB_SIG_LEN ]; /* tag + version */
 	unsigned short len;
 } __PACK__ mib_hdr_t;
 
+#define MIB_HEADER_COMP_TAG	"COMP"
+#define MIB_HEADER_COMPHS_TAG	"HS"
+#define MIB_HEADER_COMPCS_TAG	"CS"
+#define MIB_COMPR_TAG_LEN	4
+#define MIB_COMPR_SIG_LEN	6
 typedef struct mib_hdr_compr
 {
-	unsigned char sig[ MIB_COMPR_TAG_LEN ]; /* tag only? */
+	unsigned char sig[ MIB_COMPR_SIG_LEN ]; /* tag + type */
 	uint16_t factor;
 	uint32_t len;
 } __PACK__ mib_hdr_compr_t;
-
 
 #ifdef HAVE_RTK_DUAL_BAND_SUPPORT
 #define NUM_WLAN_INTERFACE		2

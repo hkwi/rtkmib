@@ -1,4 +1,5 @@
 #include <getopt.h>
+#include <stdarg.h>
 
 #include "rtkmib.h"
 #include "mibtbl.h"
@@ -7,12 +8,14 @@
 #define VERSION		"0.0.2"
 
 
-static const char *opt_string = ":i:O:o:h";
+uint8_t verbose = 0;
+static const char *opt_string = ":i:O:o:hv";
 static struct option long_options[] = {
 	{ "input", required_argument, NULL, 'i' },
 	{ "output", required_argument, NULL, 'O' },
 	{ "offset", required_argument, NULL, 'o' },
 	{ "help", no_argument, NULL, 'h' },
+	{ "verbose", no_argument, NULL, 'v' },
 	{ 0, 0, 0, 0 },
 };
 
@@ -25,6 +28,7 @@ void usage ( char *pname ) {
 		"   -O, --output           output file name\n",
 		"   -o, --offset           MIB data start offset (bytes)\n",
 		"   -h, --help             print this help message\n",
+		"   -v, --verbose          see what's going on under the cap\n",
 		"\n",
 		"If you find bugs, cockroaches or other nasty insects don't\n",
 		"send them to roman@advem.lv - just kill 'em! ;)\n",
@@ -38,31 +42,20 @@ void usage ( char *pname ) {
 	}
 }
 
-static int flash_read( char *mtd, int offset, int len, char *buf )
+static void printv( const char *format, ... )
 {
-	if ( !buf || !mtd || len < 0 )
-		return -1;
+	if ( !format )
+		return;
 
-	int err = 0;
-	int fd = open( mtd, O_RDONLY );
-
-	if ( fd < 0 ) {
-		printf( "Flash read error: %m\n" );
-		return fd;
+	if ( verbose ) {
+		va_list args;
+		va_start( args, format );
+		vprintf( format, args );
+		va_end( args );
 	}
-
-	if ( offset > 0 )
-		lseek( fd, offset, SEEK_SET );
-
-	if ( read( fd, buf, len ) != len )
-		err = -1;
-
-	close( fd );
-
-	return err;
 }
 
-int is_big_endian( void )
+inline int is_big_endian( void )
 {
 	union {
 		uint32_t i;
@@ -86,11 +79,126 @@ inline uint32_t swap32( uint32_t x )
 				(x << 24);
 }
 
+static void print_hex( unsigned char *buf, uint32_t size )
+{
+	if ( !buf ) {
+		printf( "Invalid buffer pointer!\n" );
+		return;
+	}
+
+	uint32_t pos = 0;
+	uint32_t lines = 0;
+
+	while ( pos < size ) {
+		printf(" %02x", buf[pos]);
+		pos++;
+		if ( lines == 31 ) {
+			printf("\n");
+			lines = 0;
+			continue;
+		}
+		if ( lines == 7 || lines == 15 || lines == 23 )
+			printf("  ");
+		lines++;
+	}
+	printf("\n");
+}
+
+static int flash_read( char *mtd, int offset, int len, char *buf )
+{
+	if ( !buf || !mtd || len < 0 )
+		return -1;
+
+	int err = 0;
+	int fd = open( mtd, O_RDONLY );
+
+	if ( fd < 0 ) {
+		printv( "Flash read error: %m\n" );
+		return fd;
+	}
+
+	if ( offset > 0 )
+		lseek( fd, offset, SEEK_SET );
+
+	if ( read( fd, buf, len ) != len )
+		err = -1;
+
+	close( fd );
+
+	return err;
+}
+
+static int mib_read( char *mtd, unsigned int offset,
+			unsigned char **mib, uint32_t *size )
+{
+	*mib = NULL;
+	mib_hdr_t header;
+	mib_hdr_compr_t header_compr;
+	unsigned int len = 0;
+	int compression = 0;
+	unsigned char *sig = NULL;
+
+	if ( flash_read( mtd, offset,
+			 sizeof(mib_hdr_t), (char *)&header ) )
+	{
+		printv( "probe header failed\n" );
+		return MIB_ERR_GENERIC;
+	}
+
+	if ( !memcmp( MIB_HEADER_COMP_TAG,
+		      header.sig,
+		      MIB_COMPR_TAG_LEN ) )
+	{
+
+		printv( "MIB is compressed!\n" );
+
+		if ( flash_read( mtd, offset, sizeof(mib_hdr_compr_t),
+						(char *)&header_compr ) )
+		{
+			printv( "read header failed\n" );
+			return MIB_ERR_GENERIC;
+		}
+		sig = header_compr.sig;
+		len = swap32(header_compr.len);
+		compression = swap16(header_compr.factor);
+	} else {
+		sig = header.sig;
+		len = swap16(header.len);
+	}
+
+	printv( "Header info:\n" );
+	printv( "  signature: '%s'\n", sig );
+	printv( "  data size: 0x%x\n", len );
+
+	*mib = (unsigned char *)malloc(len);
+
+	if ( compression ) {
+		printv( "  compression factor: 0x%x\n", compression );
+
+		*size = len;
+		if ( flash_read( mtd, offset + sizeof(mib_hdr_compr_t),
+				 len, (char *)*mib ) )
+		{
+			printv( "MIB read failed\n" );
+			return MIB_ERR_GENERIC;
+		}
+		return MIB_ERR_COMPRESSED;
+	}
+
+	if ( flash_read( mtd, offset + sizeof(mib_hdr_t),
+			 len, (char *)*mib ) )
+	{
+		printv( "MIB read failed\n" );
+		return MIB_ERR_GENERIC;
+	}
+
+	return len;
+}
+
 #define RING_SIZE       4096    /* size of ring buffer, must be power of 2 */
 #define UL_MATCH        18      /* upper limit for match_length */
 #define THRESHOLD       2       /* encode string into position and length
                                  * if match_length is greater than this */
-
 static int mib_decode( unsigned char *in, uint32_t len, unsigned char **out )
 {
 	if ( !in || !out || len < 1 )
@@ -168,96 +276,13 @@ static int mib_decode( unsigned char *in, uint32_t len, unsigned char **out )
 	return explen;
 }
 
-static int mib_read( char *mtd, unsigned int offset,
-			unsigned char **mib, uint32_t *size )
+static void mibtbl_to_struct( unsigned char *tbl,
+			      uint32_t size,
+			      unsigned char *mib )
 {
-	*mib = NULL;
-	mib_hdr_t header;
-	mib_hdr_compr_t header_compr;
-	unsigned int len = 0;
-	int compression = 0;
-	unsigned char *sig = NULL;
+	if ( !tbl || ! mib )
+		return;
 
-	if ( flash_read( mtd, offset,
-			 sizeof(mib_hdr_t), (char *)&header ) )
-	{
-		syslog( LOG_ERR, "probe header failed\n" );
-		return MIB_ERR_GENERIC;
-	}
-
-	if ( !memcmp( MIB_HEADER_COMPR_TAG,
-		      header.sig,
-		      sizeof(header.sig) ) )
-	{
-#ifdef _DEBUG_
-		printf( "MIB is compressed!\n" );
-#endif
-		if ( flash_read( mtd, offset, sizeof(mib_hdr_compr_t),
-						(char *)&header_compr ) )
-		{
-			syslog( LOG_ERR, "read header failed\n" );
-			return MIB_ERR_GENERIC;
-		}
-		sig = header_compr.sig;
-		len = swap32(header_compr.len);
-		compression = swap16(header_compr.factor);
-	} else {
-		sig = header.sig;
-		len = swap16(header.len);
-	}
-#ifdef _DEBUG_
-	printf( "Header info:\n" );
-	printf( "  signature: '%s'\n", sig );
-	printf( "  data size: 0x%x\n", len );
-#endif
-	*mib = (unsigned char *)malloc(len);
-
-	if ( compression ) {
-#ifdef _DEBUG_
-		printf( "  compression factor: 0x%x\n", compression );
-#endif
-		*size = len;
-		if ( flash_read( mtd, offset + sizeof(mib_hdr_compr_t),
-				 len, (char *)*mib ) )
-		{
-			syslog( LOG_ERR, "MIB read failed\n" );
-			return MIB_ERR_GENERIC;
-		}
-		return MIB_ERR_COMPRESSED;
-	}
-
-	if ( flash_read( mtd, offset + sizeof(mib_hdr_t),
-			 len, (char *)*mib ) )
-	{
-		syslog( LOG_ERR, "MIB read failed\n" );
-		return MIB_ERR_GENERIC;
-	}
-
-	return len;
-}
-
-void print_hex( unsigned char *buf, uint32_t size )
-{
-	uint32_t pos = 0;
-	uint32_t lines = 0;
-
-	while ( pos < size ) {
-		printf(" %02x", buf[pos]);
-		pos++;
-		if ( lines == 31 ) {
-			printf("\n");
-			lines = 0;
-			continue;
-		}
-		if ( lines == 7 || lines == 15 || lines == 23 )
-			printf("  ");
-		lines++;
-	}
-	printf("\n");
-}
-
-void mibtbl_to_struct( unsigned char *tbl, uint32_t size, unsigned char *mib )
-{
 	int i = 0;
 	mibtbl_t mibtbl;
 
@@ -267,18 +292,14 @@ void mibtbl_to_struct( unsigned char *tbl, uint32_t size, unsigned char *mib )
 
 		/* does 0xc900 mean the end of a table? */
 		if( swap16(mibtbl.type) > MIB_TABLE_LIST ) {
-#ifdef _DEBUG_
-			printf( "Next table with size 0x%02x!\n",
+			printv( "Next table with size 0x%02x!\n",
 						swap16(mibtbl.size) );
-#endif
 			continue;
 		}
 
 		switch ( swap16(mibtbl.type) ) {
 		case 0:
-#ifdef _DEBUG_
-			printf("End of MIB tables!\n");
-#endif
+			printv("End of MIB tables!\n");
 			break;
 		case MIB_HW_BOARD_VER:
 			memcpy( &(((mib_t *)mib)->board_ver),
@@ -486,10 +507,11 @@ void mibtbl_to_struct( unsigned char *tbl, uint32_t size, unsigned char *mib )
 					swap16(mibtbl.size) );
 			break;
 		default:
-			printf( "unknown field (type %i) found,"
+			printv( "unknown field (type %i) found,"
 				"containing data:\n",
 				swap16(mibtbl.type) );
-			print_hex( tbl + i, swap16(mibtbl.size) );
+			if ( verbose )
+				print_hex( tbl + i, swap16(mibtbl.size) );
 			break;
 		}
 
@@ -728,6 +750,9 @@ int main( int argc, char **argv )
 		case 'h':
 			usage(argv[0]);
 			exit(EXIT_SUCCESS);
+		case 'v':
+			verbose = 1;
+			break;
 		case '?':
 		default:
 			printf( "%s: option -%c is invalid\n", argv[0], optopt );
@@ -746,7 +771,7 @@ int main( int argc, char **argv )
 	mib_wlan_t *mib_wlan;
 
 	if ( efuse ) {
-		syslog( LOG_WARNING,"Efuse enabled. Nothing to do!\n" );
+		printv( "Efuse enabled. Nothing to do!\n" );
 		exit(EXIT_SUCCESS);
 	}
 
@@ -757,16 +782,17 @@ int main( int argc, char **argv )
 
 	if ( mib_len == MIB_ERR_COMPRESSED ) {
 		mib_len = mib_decode( buf, size, &tmp );
-#ifdef _DEBUG_
-		printf( "Compressed size: %i\n", size );
+
+		printv( "Compressed size: %i\n", size );
 		mib_hdr_t *header = (mib_hdr_t *)tmp;
-		printf( "Header signature: '%s'\n", header->sig );
-		printf( "Length from header: 0x%x\n", swap16(header->len) );
-		printf( "Decoded length: 0x%x\n", mib_len );
-		printf( "Expected mininum len: 0x%x\n", (int)sizeof(mib_t) );
-		printf( "Decoded data:\n" );
-		print_hex( tmp + sizeof(mib_hdr_t), mib_len );
-#endif
+		printv( "Header signature: '%s'\n", header->sig );
+		printv( "Length from header: 0x%x\n", swap16(header->len) );
+		printv( "Decoded length: 0x%x\n", mib_len );
+		printv( "Expected mininum len: 0x%x\n", (int)sizeof(mib_t) );
+		printv( "Decoded data:\n" );
+		if ( verbose )
+			print_hex( tmp + sizeof(mib_hdr_t), mib_len );
+
 		free(buf);
 		buf = (unsigned char *)malloc( sizeof(mib_t) );
 		memset( buf, 0, sizeof(mib_t) );
@@ -776,42 +802,42 @@ int main( int argc, char **argv )
 	mib = buf;
 
 	if ( mib_len < (int)sizeof(mib_t) ) {
-		syslog( LOG_ERR, "MIB length invalid!\n" );
+		printv( "MIB length invalid!\n" );
 		goto exit;
 	}
-#ifdef _DEBUG_
-	printf( "board version: 0x%02x\n", mib[0]);
-	printf( "nic0: %02x:%02x:%02x:%02x:%02x:%02x\n",
+
+	printv( "board version: 0x%02x\n", mib[0]);
+	printv( "nic0: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[1], mib[2], mib[3],
 				mib[4], mib[5], mib[6] );
-	printf( "nic1: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "nic1: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[7], mib[8], mib[9],
 				mib[10], mib[11], mib[12] );
-	printf( "wlan0: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "wlan0: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[13], mib[14], mib[15],
 				mib[16], mib[17], mib[18] );
-	printf( "wlan1: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "wlan1: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[19], mib[20], mib[21],
 				mib[22], mib[23], mib[24] );
-	printf( "wlan2: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "wlan2: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[25], mib[26], mib[27],
 				mib[28], mib[29], mib[30] );
-	printf( "wlan3: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "wlan3: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[31], mib[32], mib[33],
 				mib[34], mib[35], mib[36] );
-	printf( "wlan4: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "wlan4: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[37], mib[38], mib[39],
 				mib[40], mib[41], mib[42] );
-	printf( "wlan5: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "wlan5: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[43], mib[44], mib[45],
 				mib[46], mib[47], mib[48] );
-	printf( "wlan6: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "wlan6: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[49], mib[50], mib[51],
 				mib[52], mib[53], mib[54] );
-	printf( "wlan7: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printv( "wlan7: %02x:%02x:%02x:%02x:%02x:%02x\n",
 				mib[55], mib[56], mib[57],
 				mib[58], mib[59], mib[60] );
-#endif
+
 	mib_wlan = (mib_wlan_t *)( mib + MIB_WLAN_OFFSET );
 	set_tx_calibration( mib_wlan, "wlan0" );
 
