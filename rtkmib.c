@@ -5,7 +5,7 @@
 #include "mibtbl.h"
 
 #define NAME		"rtkmib"
-#define VERSION		"0.0.3"
+#define VERSION		"0.0.4"
 
 
 uint8_t verbose = 0;
@@ -175,9 +175,12 @@ static int mib_read( char *mtd, unsigned int offset,
 		sig = header_compr.sig;
 		len = swap32(header_compr.len);
 		compression = swap16(header_compr.factor);
-	} else {
+	} else if ( !memcmp( MIB_HEADER_TAG, header.sig, MIB_TAG_LEN ) ) {
 		sig = header.sig;
 		len = swap16(header.len);
+	} else {
+		printv("Invalid MIB header!\n");
+		return MIB_ERR_GENERIC;
 	}
 
 	printv( "Header info:\n" );
